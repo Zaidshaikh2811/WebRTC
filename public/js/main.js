@@ -1,64 +1,76 @@
-const createUserBtn = document.getElementById('create-user');
-const username = document.getElementById('username');
-const allusersHtml = document.getElementById('allusers');
-const socket = io()
+const createUserBtn = document.getElementById("create-user");
+const username = document.getElementById("username");
+const allusersHtml = document.getElementById("allusers");
+const localVideo = document.getElementById("localVideo");
+const remoteVideo = document.getElementById("remoteVideo");
+const endCallBtn = document.getElementById("end-call-btn");
+const socket = io();
+let localStream;
+let caller = [];
 
-
-
+// Single Method for peer connection
 const PeerConnection = (function () {
+    let peerConnection;
 
-    let PeerConnection;
     const createPeerConnection = () => {
-        const peerConnection = new RTCPeerConnection({
+        const config = {
             iceServers: [
                 {
-                    urls: "stun:stun1.l.google.com:19302",
-                },
-                {
-                    urls: "stun:stun2.l.google.com:19302",
-                },
-            ],
-        });
-        return peerConnection
+                    urls: 'stun:stun.l.google.com:19302'
+                }
+            ]
+        };
+        peerConnection = new RTCPeerConnection(config);
+
+        // add local stream to peer connection
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
+        })
+        // listen to remote stream and add to peer connection
+        peerConnection.ontrack = function (event) {
+            remoteVideo.srcObject = event.streams[0];
+        }
+        // listen for ice candidate
+        peerConnection.onicecandidate = function (event) {
+            if (event.candidate) {
+                socket.emit("icecandidate", event.candidate);
+            }
+        }
+
+        return peerConnection;
     }
+
     return {
         getInstance: () => {
-            if (!PeerConnection) {
-                PeerConnection = createPeerConnection()
+            if (!peerConnection) {
+                peerConnection = createPeerConnection();
             }
-            return PeerConnection;
+            return peerConnection;
         }
     }
-})
+})();
 
-createUserBtn.addEventListener('click', async (e) => {
-    if (username.value !== '') {
-        const usernameContainer = document.querySelector('.username-input');
-
-
-        socket.emit('join-user', username.value)
+// handle browser events
+createUserBtn.addEventListener("click", (e) => {
+    if (username.value !== "") {
+        const usernameContainer = document.querySelector(".username-input");
+        socket.emit("join-user", username.value);
         usernameContainer.style.display = 'none';
     }
+});
+endCallBtn.addEventListener("click", (e) => {
+    socket.emit("call-ended", caller)
 })
 
-
-
-socket.on('user-joined', (users) => {
-
-
-
+// handle socket events
+socket.on("joined", allusers => {
+    console.log({ allusers });
     const createUsersHtml = () => {
         allusersHtml.innerHTML = "";
 
-        for (const key in users) {
-            const userObj = users[key];
-            const user = userObj.username;
-
+        for (const user in allusers) {
             const li = document.createElement("li");
-
-
             li.textContent = `${user} ${user === username.value ? "(You)" : ""}`;
-
 
             if (user !== username.value) {
                 const button = document.createElement("button");
@@ -67,7 +79,7 @@ socket.on('user-joined', (users) => {
                     startCall(user);
                 });
                 const img = document.createElement("img");
-                img.setAttribute("src", "/image/phone.png");
+                img.setAttribute("src", "/images/phone.png");
                 img.setAttribute("width", 20);
 
                 button.appendChild(img);
@@ -75,22 +87,69 @@ socket.on('user-joined', (users) => {
                 li.appendChild(button);
             }
 
-
             allusersHtml.appendChild(li);
         }
     }
-    createUsersHtml()
+
+    createUsersHtml();
+
+})
+socket.on("offer", async ({ from, to, offer }) => {
+    const pc = PeerConnection.getInstance();
+    // set remote description
+    await pc.setRemoteDescription(offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("answer", { from, to, answer: pc.localDescription });
+    caller = [from, to];
+});
+socket.on("answer", async ({ from, to, answer }) => {
+    const pc = PeerConnection.getInstance();
+    await pc.setRemoteDescription(answer);
+    // show end call button
+    endCallBtn.style.display = 'block';
+    socket.emit("end-call", { from, to });
+    caller = [from, to];
+});
+socket.on("icecandidate", async candidate => {
+    console.log({ candidate });
+    const pc = PeerConnection.getInstance();
+    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+});
+socket.on("end-call", ({ from, to }) => {
+    endCallBtn.style.display = "block";
+});
+socket.on("call-ended", (caller) => {
+    endCall();
 })
 
 
-const startCall = (user) => {
-
+// start call method
+const startCall = async (user) => {
+    console.log({ user })
+    const pc = PeerConnection.getInstance();
+    const offer = await pc.createOffer();
+    console.log({ offer })
+    await pc.setLocalDescription(offer);
+    socket.emit("offer", { from: username.value, to: user, offer: pc.localDescription });
 }
 
+const endCall = () => {
+    const pc = PeerConnection.getInstance();
+    if (pc) {
+        pc.close();
+        endCallBtn.style.display = 'none';
+    }
+}
+
+// initialize app
 const startMyVideo = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-    console.log(stream);
-
-
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        console.log({ stream });
+        localStream = stream;
+        localVideo.srcObject = stream;
+    } catch (error) { }
 }
-startMyVideo()
+
+startMyVideo();
